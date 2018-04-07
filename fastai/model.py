@@ -31,6 +31,7 @@ class Stepper():
         self.m,self.opt,self.crit,self.clip,self.reg_fn = m,opt,crit,clip,reg_fn
         self.fp16 = fp16
         self.reset(True)
+
         self.loss_scale = loss_scale if fp16 else 1
         if self.fp16: self.fp32_params = copy_model_to_fp32(m, opt)
         
@@ -39,39 +40,26 @@ class Stepper():
         else: self.m.eval()
         if hasattr(self.m, 'reset'): 
             self.m.reset()
-            #if self.fp16: self.fp32_params = copy_model_to_fp32(self.m, self.opt)
+            if self.fp16: self.fp32_params = copy_model_to_fp32(self.m, self.opt)
 
     def step(self, xs, y, epoch):
-        if self.fp16: return self.step_fp16(xs, y, epoch)
         xtra = []
         output = self.m(*xs)
         if isinstance(output,tuple): output,*xtra = output
-        self.opt.zero_grad()
-        loss = raw_loss = self.crit(output, y)
-        if self.reg_fn: loss = self.reg_fn(output, xtra, raw_loss)
-        loss.backward()
-        if self.clip:   # Gradient clipping
-            nn.utils.clip_grad_norm(trainable_params_(self.m), self.clip)
-        self.opt.step()
-        return raw_loss.data[0]
-    
-    
-    def step_fp16(self, xs, y, epoch):
-        xtra = []
-        output = self.m(*xs)
-        if isinstance(output,tuple): output,*xtra = output
-        self.m.zero_grad()
+        if self.fp16: self.m.zero_grad()
+        else: self.opt.zero_grad() 
         loss = raw_loss = self.crit(output, y)
         if self.loss_scale != 1: loss = loss*self.loss_scale
         if self.reg_fn: loss = self.reg_fn(output, xtra, raw_loss)
         loss.backward()
-        update_fp32_grads(self.fp32_params, self.m)
-        if self.loss_scale != 1:
+        if self.fp16: update_fp32_grads(self.fp32_params, self.m)
+        if self.loss_scale != 1: 
             for param in self.fp32_params: param.grad.data.div_(self.loss_scale)
         if self.clip:   # Gradient clipping
-            nn.utils.clip_grad_norm(trainable_params_(self.fp32_params), self.clip)
+            nn.utils.clip_grad_norm(trainable_params_(self.m), self.clip)
         self.opt.step()
-        copy_fp32_to_model(self.m, self.fp32_params)
+        if self.fp16: copy_fp32_to_model(self.m, self.fp32_params)
+        torch.cuda.synchronize()
         return raw_loss.data[0]
 
     def evaluate(self, xs, y):
@@ -87,7 +75,7 @@ def set_train_mode(m):
     else: m.train()
 
 
-def fit(model, data, epochs, opt, crit, metrics=None, callbacks=None, stepper=Stepper, **kwargs):
+def fit(model, data, epochs, opt, crit, metrics=None, callbacks=None, stepper=Stepper, train_sampler=None, **kwargs):
     """ Fits a model
 
     Arguments:
@@ -113,6 +101,8 @@ def fit(model, data, epochs, opt, crit, metrics=None, callbacks=None, stepper=St
         epochs = 1
 
     for epoch in tnrange(epochs, desc='Epoch'):
+        if train_sampler:
+            train_sampler.set_epoch(epoch)
         stepper.reset(True)
         t = tqdm(iter(data.trn_dl), leave=False, total=num_batch)
         i = 0

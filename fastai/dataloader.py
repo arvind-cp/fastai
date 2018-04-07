@@ -9,7 +9,7 @@ string_classes = (str, bytes)
 
 def get_tensor(batch, pin):
     if isinstance(batch, (np.ndarray, np.generic)):
-        batch = T(batch).contiguous()
+        batch = T(batch, not pin).contiguous()
         return batch.pin_memory() if pin else batch
     elif isinstance(batch, string_classes): return batch
     elif isinstance(batch, collections.Mapping):

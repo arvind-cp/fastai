@@ -15,7 +15,7 @@ class FP16(nn.Module):
 
     def state_dict(self, *inputs, **kwargs):
         return self.module.state_dict(*inputs, **kwargs)
-
+    
 def batchnorm_to_fp32(module):
     '''
     BatchNorm layers to have parameters in single precision.
